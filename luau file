@@ -1110,7 +1110,8 @@ function utility:BeginDropkickHook(char)
     end
 
     if not self:CheckValidRigType(hum) then
-        return self.LocalPlayer:Kick("Change avatar to R15")
+        warn("Dropkick requires an R15 avatar; menu remains available")
+        return "unsupported_rig"
     end
 
     local animator = hum:WaitForChild("Animator", 1)
@@ -1123,44 +1124,40 @@ end
 
 function utility:Initialize()
     self.LocalPlayer = self.Players.LocalPlayer
-
     if not self.LocalPlayer then
-        return warn("failed to get localplayer")
-    end
-
-    pcall(makefolder, self.cacheFolder)
-
-    self:LoadSettings()
-
-    self.character = self.LocalPlayer.Character
-    if not self.character then
-        self.character = self.LocalPlayer.CharacterAdded:Wait()
-    end
-
-
-    if self:BeginDropkickHook(self.character) ~= "success" then
+        warn("Dropkick: LocalPlayer unavailable; run this as a client script")
         return
     end
 
-    self.charadded = self.LocalPlayer.CharacterAdded:Connect(function(character)
-        self:BeginDropkickHook(character)
-    end)
+    pcall(function() makefolder(self.cacheFolder) end)
+    pcall(function() self:LoadSettings() end)
 
-    self:CreateUI()
-    self:MouseDetection()
-    self:StartKeyDetection()
-    self:StartAntiFling()
-
-    task.defer(function()
-        if not self.unloaded then self:SetupGlobalNoClip() end
-    end)
-
-    if not self.charadded then
-        return warn("failed to initialize charadded")
+    -- Build the interface independently of character/animation readiness.
+    local ok, err = pcall(function() self:CreateUI() end)
+    if not ok then
+        warn("Dropkick: UI initialization failed: " .. tostring(err))
+        return
     end
 
-    return warn("success")
+    local function safelyStart(label, callback)
+        local success, failure = pcall(callback)
+        if not success then warn("Dropkick " .. label .. ": " .. tostring(failure)) end
+    end
+
+    safelyStart("mouse input", function() self:MouseDetection() end)
+    safelyStart("key input", function() self:StartKeyDetection() end)
+    safelyStart("anti-fling", function() self:StartAntiFling() end)
+
+    task.spawn(function()
+        local character = self.LocalPlayer.Character or self.LocalPlayer.CharacterAdded:Wait()
+        if self.unloaded then return end
+        safelyStart("character", function() self:BeginDropkickHook(character) end)
+        self.charadded = self.LocalPlayer.CharacterAdded:Connect(function(newCharacter)
+            safelyStart("respawn", function() self:BeginDropkickHook(newCharacter) end)
+        end)
+        safelyStart("collision setup", function() self:SetupGlobalNoClip() end)
+    end)
+    warn("Dropkick: UI loaded")
 end
 
 utility:Initialize()
-```

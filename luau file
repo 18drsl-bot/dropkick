@@ -77,7 +77,7 @@ end)
 
 utility.selectedMethod = "Click"
 utility.selectedKey = Enum.KeyCode.F
-utility.flingForce = 15000
+utility.flingForce = 1500000
 
 utility.keyListening = false
 utility.recordingKey = false

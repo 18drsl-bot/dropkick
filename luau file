@@ -89,6 +89,7 @@ utility.AnimationCutTime = 0.3
 utility.savedWalkSpeed = nil
 utility.savedAutoRotate = true
 utility.walkflinging = false
+utility.antiFlingEnabled = false
 utility.cacheFolder = "DropKick by Yes"
 utility.cacheFile = utility.cacheFolder .. "/cache.json"
 
@@ -128,6 +129,10 @@ function utility:LoadSettings()
                 end
             end
 
+            if type(data.antiFlingEnabled) == "boolean" then
+                self.antiFlingEnabled = data.antiFlingEnabled
+            end
+
             if data.flingForce then
                 self.flingForce = math.clamp(
                     tonumber(data.flingForce) or 15000,
@@ -143,7 +148,8 @@ function utility:SaveSettings()
     local data = {
         selectedMethod = self.selectedMethod,
         selectedKey = self.selectedKey.Name,
-        flingForce = self.flingForce
+        flingForce = self.flingForce,
+        antiFlingEnabled = self.antiFlingEnabled
     }
 
     local json = self.HttpService:JSONEncode(data)
@@ -309,6 +315,30 @@ function utility:SetupGlobalNoClip()
                 end
             end
         end)
+    end)
+end
+
+-- Defensive local velocity limiter. Does not alter other players' characters.
+function utility:StartAntiFling()
+    if self.conns.antiFling then self.conns.antiFling:Disconnect() end
+    self.conns.antiFling = self.RunService.Heartbeat:Connect(function()
+        if self.unloaded or not self.antiFlingEnabled or self.actionRunning or self.walkflinging then return end
+        local character = self.LocalPlayer and self.LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if not root or not humanoid or humanoid.Health <= 0 or root.Anchored then return end
+        if humanoid.Sit or humanoid.SeatPart then return end
+
+        local velocity = root.AssemblyLinearVelocity
+        local horizontal = Vector3.new(velocity.X, 0, velocity.Z)
+        -- Ignore normal jumps and movement; catch unusually large impulses.
+        if horizontal.Magnitude > 120 or math.abs(velocity.Y) > 110 then
+            local limitedHorizontal = horizontal.Magnitude > 120 and horizontal.Unit * 24 or horizontal
+            root.AssemblyLinearVelocity = Vector3.new(limitedHorizontal.X, math.clamp(velocity.Y, -45, 55), limitedHorizontal.Z)
+            root.AssemblyAngularVelocity = Vector3.zero
+        elseif root.AssemblyAngularVelocity.Magnitude > 75 then
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
     end)
 end
 
@@ -682,6 +712,8 @@ function utility:UpdateUI()
     self.ClickButton.BackgroundColor3 = clickColor
     self.KeyButton.BackgroundColor3 = keyColor
     self.UIButton.BackgroundColor3 = uiColor
+    self.AntiFlingButton.Text = self.antiFlingEnabled and "Anti-Fling: ON" or "Anti-Fling: OFF"
+    self.AntiFlingButton.BackgroundColor3 = self.antiFlingEnabled and Color3.fromRGB(39, 105, 77) or Color3.fromRGB(39, 39, 43)
 
     self.KeyConfig.Visible = self.selectedMethod == "Key"
     self.ActionButton.Visible = self.uiReady and self.selectedMethod == "UI Button"
@@ -696,7 +728,7 @@ end
 function utility:ResizePanel()
     if not self.menuOpen then return end
 
-    local height = 143
+    local height = 185
     if self.selectedMethod == "Key" then
         height += 42
     end
@@ -811,6 +843,15 @@ function utility:CreateUI()
     self.ClickButton = click
     self.KeyButton = key
     self.UIButton = uiButton
+
+    local antiFlingButton = self:CreateButton(panel, "Anti-Fling: OFF")
+    antiFlingButton.LayoutOrder = 5
+    self.AntiFlingButton = antiFlingButton
+    antiFlingButton.MouseButton1Click:Connect(function()
+        self.antiFlingEnabled = not self.antiFlingEnabled
+        self:UpdateUI()
+        self:SaveSettings()
+    end)
 
     local keyConfig = Instance.new("Frame")
     keyConfig.Name = "KeyConfig"
@@ -1108,6 +1149,7 @@ function utility:Initialize()
     self:CreateUI()
     self:MouseDetection()
     self:StartKeyDetection()
+    self:StartAntiFling()
 
     task.defer(function()
         if not self.unloaded then self:SetupGlobalNoClip() end

@@ -40,6 +40,7 @@ end
 function utility:Unload()
     self.unloaded = true
     self:StopAction()
+    self:DisableGlobalNoClip()
     for _, connection in pairs(self.conns) do
         pcall(function() connection:Disconnect() end)
     end
@@ -89,7 +90,7 @@ utility.AnimationCutTime = 0.3
 utility.savedWalkSpeed = nil
 utility.savedAutoRotate = true
 utility.walkflinging = false
-utility.antiFlingEnabled = false
+utility.antiFlingEnabled = true
 utility.cacheFolder = "DropKick by Yes"
 utility.cacheFile = utility.cacheFolder .. "/cache.json"
 
@@ -185,6 +186,7 @@ function utility:CleanupPlayerNoCollision(player)
 end
 
 function utility:SetupPlayerNoCollision(player)
+    if not self.antiFlingEnabled then return end
     if not player or player == self.LocalPlayer then return end
 
     self:CleanupPlayerNoCollision(player)
@@ -242,13 +244,29 @@ function utility:SetupPlayerNoCollision(player)
     end)
 end
 
+function utility:DisableGlobalNoClip()
+    if self.noClipPlayerAdded then self.noClipPlayerAdded:Disconnect(); self.noClipPlayerAdded = nil end
+    if self.noClipPlayerRemoving then self.noClipPlayerRemoving:Disconnect(); self.noClipPlayerRemoving = nil end
+    if self.noClipLocalCharacterAdded then self.noClipLocalCharacterAdded:Disconnect(); self.noClipLocalCharacterAdded = nil end
+    for player, connections in pairs(self.noClipConnections) do
+        for _, connection in pairs(connections) do
+            pcall(function() connection:Disconnect() end)
+        end
+        self.noClipConnections[player] = nil
+    end
+    for player in pairs(self.noCollisionConstraints) do
+        self:CleanupPlayerNoCollision(player)
+    end
+end
+
 function utility:SetupGlobalNoClip()
+    if not self.antiFlingEnabled then return end
     local function setupPlayer(player)
         if player == self.LocalPlayer then return end
 
         local function setupCharacter(character)
             task.defer(function()
-                if player ~= self.LocalPlayer and character == player.Character then
+                if self.antiFlingEnabled and player ~= self.LocalPlayer and character == player.Character then
                     self:SetupPlayerNoCollision(player)
                 end
             end)
@@ -310,35 +328,11 @@ function utility:SetupGlobalNoClip()
     self.noClipLocalCharacterAdded = self.LocalPlayer.CharacterAdded:Connect(function()
         task.defer(function()
             for _, player in ipairs(self.Players:GetPlayers()) do
-                if player ~= self.LocalPlayer and player.Character then
+                if self.antiFlingEnabled and player ~= self.LocalPlayer and player.Character then
                     self:SetupPlayerNoCollision(player)
                 end
             end
         end)
-    end)
-end
-
--- Defensive local velocity limiter. Does not alter other players' characters.
-function utility:StartAntiFling()
-    if self.conns.antiFling then self.conns.antiFling:Disconnect() end
-    self.conns.antiFling = self.RunService.Heartbeat:Connect(function()
-        if self.unloaded or not self.antiFlingEnabled or self.actionRunning or self.walkflinging then return end
-        local character = self.LocalPlayer and self.LocalPlayer.Character
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-        if not root or not humanoid or humanoid.Health <= 0 or root.Anchored then return end
-        if humanoid.Sit or humanoid.SeatPart then return end
-
-        local velocity = root.AssemblyLinearVelocity
-        local horizontal = Vector3.new(velocity.X, 0, velocity.Z)
-        -- Ignore normal jumps and movement; catch unusually large impulses.
-        if horizontal.Magnitude > 120 or math.abs(velocity.Y) > 110 then
-            local limitedHorizontal = horizontal.Magnitude > 120 and horizontal.Unit * 24 or horizontal
-            root.AssemblyLinearVelocity = Vector3.new(limitedHorizontal.X, math.clamp(velocity.Y, -45, 55), limitedHorizontal.Z)
-            root.AssemblyAngularVelocity = Vector3.zero
-        elseif root.AssemblyAngularVelocity.Magnitude > 75 then
-            root.AssemblyAngularVelocity = Vector3.zero
-        end
     end)
 end
 
@@ -712,8 +706,11 @@ function utility:UpdateUI()
     self.ClickButton.BackgroundColor3 = clickColor
     self.KeyButton.BackgroundColor3 = keyColor
     self.UIButton.BackgroundColor3 = uiColor
-    self.AntiFlingButton.Text = self.antiFlingEnabled and "Anti-Fling: ON" or "Anti-Fling: OFF"
-    self.AntiFlingButton.BackgroundColor3 = self.antiFlingEnabled and Color3.fromRGB(39, 105, 77) or Color3.fromRGB(39, 39, 43)
+    if self.AntiFlingButton then
+        self.AntiFlingButton.Text = self.antiFlingEnabled and "Anti-Fling: ON" or "Anti-Fling: OFF"
+        self.AntiFlingButton.BackgroundColor3 = self.antiFlingEnabled
+            and Color3.fromRGB(35, 110, 70) or Color3.fromRGB(135, 50, 55)
+    end
 
     self.KeyConfig.Visible = self.selectedMethod == "Key"
     self.ActionButton.Visible = self.uiReady and self.selectedMethod == "UI Button"
@@ -844,14 +841,9 @@ function utility:CreateUI()
     self.KeyButton = key
     self.UIButton = uiButton
 
-    local antiFlingButton = self:CreateButton(panel, "Anti-Fling: OFF")
+    local antiFlingButton = self:CreateButton(panel, "Anti-Fling: ON")
     antiFlingButton.LayoutOrder = 5
     self.AntiFlingButton = antiFlingButton
-    antiFlingButton.MouseButton1Click:Connect(function()
-        self.antiFlingEnabled = not self.antiFlingEnabled
-        self:UpdateUI()
-        self:SaveSettings()
-    end)
 
     local keyConfig = Instance.new("Frame")
     keyConfig.Name = "KeyConfig"
@@ -1011,6 +1003,17 @@ function utility:CreateUI()
         self:SaveSettings()
     end)
 
+    antiFlingButton.MouseButton1Click:Connect(function()
+        self.antiFlingEnabled = not self.antiFlingEnabled
+        if self.antiFlingEnabled then
+            self:SetupGlobalNoClip()
+        else
+            self:DisableGlobalNoClip()
+        end
+        self:UpdateUI()
+        self:SaveSettings()
+    end)
+
     keyBox.MouseButton1Click:Connect(function()
         if self.selectedMethod ~= "Key" then return end
         if self.keyListening or self.recordingKey then return end
@@ -1110,8 +1113,7 @@ function utility:BeginDropkickHook(char)
     end
 
     if not self:CheckValidRigType(hum) then
-        warn("Dropkick requires an R15 avatar; menu remains available")
-        return "unsupported_rig"
+        return self.LocalPlayer:Kick("Change avatar to R15")
     end
 
     local animator = hum:WaitForChild("Animator", 1)
@@ -1124,40 +1126,43 @@ end
 
 function utility:Initialize()
     self.LocalPlayer = self.Players.LocalPlayer
+
     if not self.LocalPlayer then
-        warn("Dropkick: LocalPlayer unavailable; run this as a client script")
+        return warn("failed to get localplayer")
+    end
+
+    pcall(makefolder, self.cacheFolder)
+
+    self:LoadSettings()
+
+    self.character = self.LocalPlayer.Character
+    if not self.character then
+        self.character = self.LocalPlayer.CharacterAdded:Wait()
+    end
+
+
+    if self:BeginDropkickHook(self.character) ~= "success" then
         return
     end
 
-    pcall(function() makefolder(self.cacheFolder) end)
-    pcall(function() self:LoadSettings() end)
-
-    -- Build the interface independently of character/animation readiness.
-    local ok, err = pcall(function() self:CreateUI() end)
-    if not ok then
-        warn("Dropkick: UI initialization failed: " .. tostring(err))
-        return
-    end
-
-    local function safelyStart(label, callback)
-        local success, failure = pcall(callback)
-        if not success then warn("Dropkick " .. label .. ": " .. tostring(failure)) end
-    end
-
-    safelyStart("mouse input", function() self:MouseDetection() end)
-    safelyStart("key input", function() self:StartKeyDetection() end)
-    safelyStart("anti-fling", function() self:StartAntiFling() end)
-
-    task.spawn(function()
-        local character = self.LocalPlayer.Character or self.LocalPlayer.CharacterAdded:Wait()
-        if self.unloaded then return end
-        safelyStart("character", function() self:BeginDropkickHook(character) end)
-        self.charadded = self.LocalPlayer.CharacterAdded:Connect(function(newCharacter)
-            safelyStart("respawn", function() self:BeginDropkickHook(newCharacter) end)
-        end)
-        safelyStart("collision setup", function() self:SetupGlobalNoClip() end)
+    self.charadded = self.LocalPlayer.CharacterAdded:Connect(function(character)
+        self:BeginDropkickHook(character)
     end)
-    warn("Dropkick: UI loaded")
+
+    self:CreateUI()
+    self:MouseDetection()
+    self:StartKeyDetection()
+
+    task.defer(function()
+        if not self.unloaded then self:SetupGlobalNoClip() end
+    end)
+
+    if not self.charadded then
+        return warn("failed to initialize charadded")
+    end
+
+    return warn("success")
 end
 
 utility:Initialize()
+```

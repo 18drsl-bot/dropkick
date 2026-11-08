@@ -1,3 +1,4 @@
+```
 local utility = {
     dropkick = Instance.new("Animation"),
     Players = game:GetService("Players"),
@@ -75,7 +76,7 @@ end)
 
 utility.selectedMethod = "Click"
 utility.selectedKey = Enum.KeyCode.F
-utility.flingForce = 5000
+utility.flingForce = 15000
 
 utility.keyListening = false
 utility.recordingKey = false
@@ -129,9 +130,9 @@ function utility:LoadSettings()
 
             if data.flingForce then
                 self.flingForce = math.clamp(
-                    tonumber(data.flingForce) or 5000,
+                    tonumber(data.flingForce) or 15000,
                     500,
-                    25000
+                    50000
                 )
             end
         end
@@ -370,9 +371,9 @@ function utility:FlingNearbyPlayers(userRoot, radius)
     local userLook = camera.CFrame.LookVector
     userLook = Vector3.new(userLook.X, 0, userLook.Z).Unit
 
-    local flingDir = (userLook * 3 + Vector3.new(0, 0.4, 0)).Unit
+    local flingDir = (userLook * 3 + Vector3.new(0, 0.65, 0)).Unit
     local force = self.flingForce
-    local upForce = force * 0.0833
+    local upForce = force * 0.16
 
     for _, player in ipairs(self.Players:GetPlayers()) do
         if player ~= self.LocalPlayer and player.Character then
@@ -541,7 +542,7 @@ function utility:PerformDropkick()
 
         leg.AssemblyAngularVelocity = Vector3.zero
 
-        self:FlingNearbyPlayers(character.HumanoidRootPart, 10)
+        self:FlingNearbyPlayers(character.HumanoidRootPart, 12)
 
         self.RunService.RenderStepped:Wait()
 
@@ -1120,3 +1121,4 @@ function utility:Initialize()
 end
 
 utility:Initialize()
+```

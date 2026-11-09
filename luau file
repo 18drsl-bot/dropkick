@@ -1,3 +1,92 @@
+-- ORIGINAL DROP KICK: ONE-PASTE STUDIO INSTALLER
+-- Run in Roblox Studio Command Bar while NOT playing.
+-- Preserves the first uploaded controller UI and animation.
+local StarterPlayer = game:GetService("StarterPlayer")
+local ServerScriptService = game:GetService("ServerScriptService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local folder = StarterPlayer:WaitForChild("StarterPlayerScripts")
+local function install(parent, name, className, source)
+    local old = parent:FindFirstChild(name)
+    if old then old:Destroy() end
+    local scriptObject = Instance.new(className)
+    scriptObject.Name = name
+    scriptObject.Source = source
+    scriptObject.Enabled = true
+    scriptObject.Parent = parent
+    return scriptObject
+end
+local remote = ReplicatedStorage:FindFirstChild("DropkickHit")
+if not remote then
+    remote = Instance.new("RemoteEvent")
+    remote.Name = "DropkickHit"
+    remote.Parent = ReplicatedStorage
+end
+install(ServerScriptService, "DropkickServer", "Script", [====[
+-- ServerScriptService > DropkickServer (Script)
+-- This is for an experience you own in Roblox Studio.
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local remote = ReplicatedStorage:FindFirstChild("DropkickHit")
+if not remote then
+    remote = Instance.new("RemoteEvent")
+    remote.Name = "DropkickHit"
+    remote.Parent = ReplicatedStorage
+end
+
+local COOLDOWN = 0.8
+local MAX_DISTANCE = 7
+local FORWARD_SPEED = 110
+local UPWARD_SPEED = 35
+local lastKick = {}
+
+remote.OnServerEvent:Connect(function(player)
+    local now = os.clock()
+    if lastKick[player] and now - lastKick[player] < COOLDOWN then return end
+
+    local character = player.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or humanoid.Health <= 0 or not root then return end
+    lastKick[player] = now
+
+    local facing = root.CFrame.LookVector
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {character}
+    local hitbox = root.CFrame * CFrame.new(0, 0, -3)
+    local parts = workspace:GetPartBoundsInBox(hitbox, Vector3.new(5, 5, 5), params)
+    local alreadyHit = {}
+
+    for _, part in ipairs(parts) do
+        local model = part:FindFirstAncestorOfClass("Model")
+        if model and not alreadyHit[model] then
+            alreadyHit[model] = true
+            local targetHumanoid = model:FindFirstChildOfClass("Humanoid")
+            local targetRoot = model:FindFirstChild("HumanoidRootPart")
+            if targetHumanoid and targetHumanoid.Health > 0 and targetRoot then
+                local offset = targetRoot.Position - root.Position
+                local distance = offset.Magnitude
+                if distance > 0.1 and distance <= MAX_DISTANCE
+                    and facing:Dot(offset.Unit) >= 0.3 then
+                    local impulse = (facing * FORWARD_SPEED + Vector3.new(0, UPWARD_SPEED, 0))
+                        * targetRoot.AssemblyMass
+                    targetRoot:ApplyImpulse(impulse)
+                end
+            end
+        end
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    lastKick[player] = nil
+end)
+
+]====])
+install(folder, "DropkickController", "LocalScript", [====[
+-- Place as a LocalScript in StarterPlayer > StarterPlayerScripts.
+-- UI and animation only; no client-side knockback of other players.
 local utility = {
     dropkick = Instance.new("Animation"),
     Players = game:GetService("Players"),
@@ -7,11 +96,12 @@ local utility = {
     Debris = game:GetService("Debris"),
     HttpService = game:GetService("HttpService"),
     StarterGui = game:GetService("StarterGui"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
     conns = {}
 }
 
 -- Unload an earlier execution before creating new listeners or UI.
-local sharedEnvironment = (type(getgenv) == "function" and getgenv()) or _G
+local sharedEnvironment = _G
 if sharedEnvironment.__DropkickControllerInstance then
     pcall(function() sharedEnvironment.__DropkickControllerInstance:Unload() end)
 end
@@ -39,6 +129,7 @@ end
 function utility:Unload()
     self.unloaded = true
     self:StopAction()
+    self:DisableGlobalNoClip()
     for _, connection in pairs(self.conns) do
         pcall(function() connection:Disconnect() end)
     end
@@ -75,7 +166,7 @@ end)
 
 utility.selectedMethod = "Click"
 utility.selectedKey = Enum.KeyCode.F
-utility.flingForce = 5000
+utility.flingForce = 1500000
 
 utility.keyListening = false
 utility.recordingKey = false
@@ -88,6 +179,7 @@ utility.AnimationCutTime = 0.3
 utility.savedWalkSpeed = nil
 utility.savedAutoRotate = true
 utility.walkflinging = false
+utility.antiFlingEnabled = false
 utility.cacheFolder = "DropKick by Yes"
 utility.cacheFile = utility.cacheFolder .. "/cache.json"
 
@@ -106,50 +198,11 @@ function utility:CheckValidRigType(h)
 end
 
 function utility:LoadSettings()
-    local success, content = pcall(function()
-        return readfile(self.cacheFile)
-    end)
-
-    if success and content then
-        local ok, data = pcall(function()
-            return self.HttpService:JSONDecode(content)
-        end)
-
-        if ok and data then
-            if data.selectedMethod then
-                self.selectedMethod = data.selectedMethod
-            end
-
-            if data.selectedKey then
-                local key = Enum.KeyCode[data.selectedKey]
-                if key then
-                    self.selectedKey = key
-                end
-            end
-
-            if data.flingForce then
-                self.flingForce = math.clamp(
-                    tonumber(data.flingForce) or 5000,
-                    500,
-                    25000
-                )
-            end
-        end
-    end
+    -- Settings are session-only in Roblox Studio LocalScripts.
 end
 
 function utility:SaveSettings()
-    local data = {
-        selectedMethod = self.selectedMethod,
-        selectedKey = self.selectedKey.Name,
-        flingForce = self.flingForce
-    }
-
-    local json = self.HttpService:JSONEncode(data)
-
-    pcall(function()
-        writefile(self.cacheFile, json)
-    end)
+    -- No executor-specific file APIs required.
 end
 
 function utility:Notify(title, text)
@@ -178,245 +231,38 @@ function utility:CleanupPlayerNoCollision(player)
 end
 
 function utility:SetupPlayerNoCollision(player)
-    if not player or player == self.LocalPlayer then return end
+    -- Other players' physics should be handled by the server in your own game.
+end
 
-    self:CleanupPlayerNoCollision(player)
-
-    local localCharacter = self.LocalPlayer.Character
-    local targetCharacter = player.Character
-
-    if not localCharacter or not targetCharacter then return end
-
-    local data = {
-        constraints = {},
-        connections = {}
-    }
-
-    self.noCollisionConstraints[player] = data
-
-    local function createConstraint(localPart, targetPart)
-        if not localPart:IsA("BasePart") or not targetPart:IsA("BasePart") then return end
-        if not localPart.Parent or not targetPart.Parent then return end
-
-        local constraint = Instance.new("NoCollisionConstraint")
-        constraint.Part0 = localPart
-        constraint.Part1 = targetPart
-        constraint.Parent = localCharacter
-        table.insert(data.constraints, constraint)
-    end
-
-    local localParts = {}
-    for _, part in ipairs(localCharacter:GetDescendants()) do
-        if part:IsA("BasePart") then
-            table.insert(localParts, part)
+function utility:DisableGlobalNoClip()
+    if self.noClipPlayerAdded then self.noClipPlayerAdded:Disconnect(); self.noClipPlayerAdded = nil end
+    if self.noClipPlayerRemoving then self.noClipPlayerRemoving:Disconnect(); self.noClipPlayerRemoving = nil end
+    if self.noClipLocalCharacterAdded then self.noClipLocalCharacterAdded:Disconnect(); self.noClipLocalCharacterAdded = nil end
+    for player, connections in pairs(self.noClipConnections) do
+        for _, connection in pairs(connections) do
+            pcall(function() connection:Disconnect() end)
         end
+        self.noClipConnections[player] = nil
     end
-
-    local function addTargetPart(targetPart)
-        if not targetPart:IsA("BasePart") then return end
-        for _, localPart in ipairs(localParts) do
-            createConstraint(localPart, targetPart)
-        end
+    for player in pairs(self.noCollisionConstraints) do
+        self:CleanupPlayerNoCollision(player)
     end
-
-    for _, targetPart in ipairs(targetCharacter:GetDescendants()) do
-        addTargetPart(targetPart)
-    end
-
-    data.connections.targetAdded = targetCharacter.DescendantAdded:Connect(function(descendant)
-        addTargetPart(descendant)
-    end)
-
-    data.connections.localAdded = localCharacter.DescendantAdded:Connect(function(descendant)
-        if not descendant:IsA("BasePart") then return end
-        for _, targetPart in ipairs(targetCharacter:GetDescendants()) do
-            createConstraint(descendant, targetPart)
-        end
-    end)
 end
 
 function utility:SetupGlobalNoClip()
-    local function setupPlayer(player)
-        if player == self.LocalPlayer then return end
-
-        local function setupCharacter(character)
-            task.defer(function()
-                if player ~= self.LocalPlayer and character == player.Character then
-                    self:SetupPlayerNoCollision(player)
-                end
-            end)
-        end
-
-        if player.Character then
-            setupCharacter(player.Character)
-        end
-
-        self.noClipConnections[player] = self.noClipConnections[player] or {}
-
-        if self.noClipConnections[player].characterAdded then
-            self.noClipConnections[player].characterAdded:Disconnect()
-        end
-
-        self.noClipConnections[player].characterAdded = player.CharacterAdded:Connect(setupCharacter)
-
-        if self.noClipConnections[player].characterRemoving then
-            self.noClipConnections[player].characterRemoving:Disconnect()
-        end
-
-        self.noClipConnections[player].characterRemoving = player.CharacterRemoving:Connect(function()
-            self:CleanupPlayerNoCollision(player)
-        end)
-    end
-
-    for _, player in ipairs(self.Players:GetPlayers()) do
-        setupPlayer(player)
-    end
-
-    if self.noClipPlayerAdded then
-        self.noClipPlayerAdded:Disconnect()
-    end
-
-    self.noClipPlayerAdded = self.Players.PlayerAdded:Connect(function(player)
-        setupPlayer(player)
-    end)
-
-    if self.noClipPlayerRemoving then
-        self.noClipPlayerRemoving:Disconnect()
-    end
-
-    self.noClipPlayerRemoving = self.Players.PlayerRemoving:Connect(function(player)
-        self:CleanupPlayerNoCollision(player)
-
-        local connections = self.noClipConnections[player]
-        if connections then
-            for _, connection in pairs(connections) do
-                pcall(function() connection:Disconnect() end)
-            end
-            self.noClipConnections[player] = nil
-        end
-    end)
-
-    if self.noClipLocalCharacterAdded then
-        self.noClipLocalCharacterAdded:Disconnect()
-    end
-
-    self.noClipLocalCharacterAdded = self.LocalPlayer.CharacterAdded:Connect(function()
-        task.defer(function()
-            for _, player in ipairs(self.Players:GetPlayers()) do
-                if player ~= self.LocalPlayer and player.Character then
-                    self:SetupPlayerNoCollision(player)
-                end
-            end
-        end)
-    end)
+    -- UI-only version: no cross-player collision modifications.
 end
 
 function utility:StartWalkFling(character)
-    if self.walkflinging then return end
-
-    local root = character:WaitForChild("HumanoidRootPart")
-    local humanoid = character:WaitForChild("Humanoid")
-
-    humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
-    humanoid.BreakJointsOnDeath = false
-
-    self.walkflinging = true
-
-    task.spawn(function()
-        while self.walkflinging and root and root.Parent do
-            self.RunService.Heartbeat:Wait()
-            if not self.walkflinging then break end
-
-            local originalVel = root.Velocity
-            root.Velocity = originalVel * 999999 + Vector3.new(0, 999999, 0)
-
-            self.RunService.RenderStepped:Wait()
-            if not self.walkflinging then break end
-
-            root.Velocity = originalVel
-
-            self.RunService.Stepped:Wait()
-            if not self.walkflinging then break end
-
-            root.Velocity = originalVel + Vector3.new(0, 0.1, 0)
-        end
-    end)
+    -- Intentionally disabled: unsafe/unreliable client physics manipulation.
 end
 
 function utility:StopWalkFling()
     self.walkflinging = false
-
-    local character = self.LocalPlayer.Character
-    if character and character:FindFirstChild("Humanoid") then
-        local humanoid = character.Humanoid
-        humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
-        humanoid.BreakJointsOnDeath = true
-
-        local root = character:FindFirstChild("HumanoidRootPart")
-        if root then
-            root.Velocity = Vector3.zero
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end
-
-        humanoid.PlatformStand = false
-    end
 end
 
 function utility:FlingNearbyPlayers(userRoot, radius)
-    local camera = workspace.CurrentCamera
-    if not camera then return end
-
-    local userLook = camera.CFrame.LookVector
-    userLook = Vector3.new(userLook.X, 0, userLook.Z).Unit
-
-    local flingDir = (userLook * 3 + Vector3.new(0, 0.4, 0)).Unit
-    local force = self.flingForce
-    local upForce = force * 0.0833
-
-    for _, player in ipairs(self.Players:GetPlayers()) do
-        if player ~= self.LocalPlayer and player.Character then
-            local targetChar = player.Character
-            local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
-            local targetHum = targetChar:FindFirstChild("Humanoid")
-
-            if targetRoot and targetHum and targetHum.Health > 0 then
-                local distance = (targetRoot.Position - userRoot.Position).Magnitude
-
-                if distance <= radius then
-                    pcall(function()
-                        targetHum:ChangeState(Enum.HumanoidStateType.Physics)
-                        targetHum.PlatformStand = true
-
-                        for _ = 1, 5 do
-                            targetRoot:RequestNetworkOwnership()
-                            task.wait(0.01)
-                        end
-
-                        local finalVel = flingDir * force + Vector3.new(0, upForce, 0)
-
-                        for _, part in ipairs(targetChar:GetDescendants()) do
-                            if part:IsA("BasePart") and part.AssemblyLinearVelocity then
-                                part.AssemblyLinearVelocity = finalVel
-                            end
-                        end
-
-                        local bv = Instance.new("BodyVelocity")
-                        bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-                        bv.Velocity = finalVel
-                        bv.Parent = targetRoot
-                        self.Debris:AddItem(bv, 0.5)
-
-                        targetRoot.AssemblyAngularVelocity = Vector3.new(
-                            math.random(-20, 20),
-                            math.random(-20, 20),
-                            math.random(-20, 20)
-                        )
-                    end)
-                end
-            end
-        end
-    end
+    -- Implement hit detection and knockback on the server in your own game.
 end
 
 function utility:PerformDropkick()
@@ -467,6 +313,7 @@ function utility:PerformDropkick()
     end)
 
     if not success or not track then
+        warn("Dropkick animation failed to load; check asset permissions and R15 rig")
         if self.actionId == thisActionId then
             humanoid.WalkSpeed = originalWalkSpeed
             humanoid.AutoRotate = originalAutoRotate
@@ -483,6 +330,19 @@ function utility:PerformDropkick()
     self.currentTrack = track
     track.Priority = Enum.AnimationPriority.Action
     track:Play(0)
+
+    -- Server-authoritative hit detection timed to the animation.
+    local hitRemote = self.ReplicatedStorage:WaitForChild("DropkickHit", 5)
+    if hitRemote then
+        task.delay(0.25, function()
+            if self.actionId == thisActionId and track.IsPlaying
+                and character.Parent then
+                hitRemote:FireServer()
+            end
+        end)
+    else
+        warn("DropkickHit RemoteEvent missing; install the server script.")
+    end
 
     self:StartWalkFling(character)
 
@@ -541,7 +401,7 @@ function utility:PerformDropkick()
 
         leg.AssemblyAngularVelocity = Vector3.zero
 
-        self:FlingNearbyPlayers(character.HumanoidRootPart, 10)
+        -- No client-side fling: use a server-authoritative hit system.
 
         self.RunService.RenderStepped:Wait()
 
@@ -649,7 +509,7 @@ end
 function utility:CreateButton(parent, text)
     local button = Instance.new("TextButton")
     button.Size = UDim2.new(1, 0, 0, 36)
-    button.BackgroundColor3 = Color3.fromRGB(39, 39, 43)
+    button.BackgroundColor3 = Color3.fromRGB(29, 32, 48)
     button.BorderSizePixel = 0
     button.Text = text
     button.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -666,21 +526,26 @@ function utility:CreateButton(parent, text)
 end
 
 function utility:UpdateUI()
-    local clickColor = Color3.fromRGB(39, 39, 43)
-    local keyColor = Color3.fromRGB(39, 39, 43)
-    local uiColor = Color3.fromRGB(39, 39, 43)
+    local clickColor = Color3.fromRGB(29, 32, 48)
+    local keyColor = Color3.fromRGB(29, 32, 48)
+    local uiColor = Color3.fromRGB(29, 32, 48)
 
     if self.selectedMethod == "Click" then
-        clickColor = Color3.fromRGB(84, 84, 91)
+        clickColor = Color3.fromRGB(89, 77, 185)
     elseif self.selectedMethod == "Key" then
-        keyColor = Color3.fromRGB(84, 84, 91)
+        keyColor = Color3.fromRGB(89, 77, 185)
     elseif self.selectedMethod == "UI Button" then
-        uiColor = Color3.fromRGB(84, 84, 91)
+        uiColor = Color3.fromRGB(89, 77, 185)
     end
 
     self.ClickButton.BackgroundColor3 = clickColor
     self.KeyButton.BackgroundColor3 = keyColor
     self.UIButton.BackgroundColor3 = uiColor
+    if self.AntiFlingButton then
+        self.AntiFlingButton.Text = self.antiFlingEnabled and "Anti-Fling: OFF" or "Anti-Fling: OFF"
+        self.AntiFlingButton.BackgroundColor3 = self.antiFlingEnabled
+            and Color3.fromRGB(35, 110, 70) or Color3.fromRGB(135, 50, 55)
+    end
 
     self.KeyConfig.Visible = self.selectedMethod == "Key"
     self.ActionButton.Visible = self.uiReady and self.selectedMethod == "UI Button"
@@ -695,13 +560,13 @@ end
 function utility:ResizePanel()
     if not self.menuOpen then return end
 
-    local height = 143
+    local height = 232
     if self.selectedMethod == "Key" then
         height += 42
     end
 
     self.Panel:TweenSize(
-        UDim2.fromOffset(180, height),
+        UDim2.fromOffset(210, height),
         Enum.EasingDirection.Out,
         Enum.EasingStyle.Quad,
         0.15,
@@ -768,7 +633,7 @@ function utility:CreateUI()
 
     local panel = Instance.new("Frame")
     panel.Name = "Panel"
-    panel.Size = UDim2.fromOffset(180, 0)
+    panel.Size = UDim2.fromOffset(210, 0)
     panel.Position = UDim2.new(0, 0, 1, 7)
     panel.BackgroundColor3 = Color3.fromRGB(18, 18, 20)
     panel.BorderSizePixel = 0
@@ -810,6 +675,10 @@ function utility:CreateUI()
     self.ClickButton = click
     self.KeyButton = key
     self.UIButton = uiButton
+
+    local antiFlingButton = self:CreateButton(panel, "Anti-Fling: OFF")
+    antiFlingButton.LayoutOrder = 5
+    self.AntiFlingButton = antiFlingButton
 
     local keyConfig = Instance.new("Frame")
     keyConfig.Name = "KeyConfig"
@@ -921,10 +790,10 @@ function utility:CreateUI()
 
         if self.menuOpen then
             panel.Visible = true
-            panel.Size = UDim2.fromOffset(180, 0)
+            panel.Size = UDim2.fromOffset(210, 0)
             self:ResizePanel()
         else
-            panel:TweenSize(UDim2.fromOffset(180, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.15, true)
+            panel:TweenSize(UDim2.fromOffset(210, 0), Enum.EasingDirection.In, Enum.EasingStyle.Quad, 0.15, true)
             task.delay(0.16, function()
                 if not self.menuOpen then
                     panel.Visible = false
@@ -965,6 +834,13 @@ function utility:CreateUI()
         else
             self.selectedMethod = "UI Button"
         end
+        self:UpdateUI()
+        self:SaveSettings()
+    end)
+
+    antiFlingButton.MouseButton1Click:Connect(function()
+        self.antiFlingEnabled = false
+        self:Notify("Anti-Fling", "Not available in this Studio-safe version")
         self:UpdateUI()
         self:SaveSettings()
     end)
@@ -1058,65 +934,141 @@ function utility:CreateUI()
 end
 
 function utility:BeginDropkickHook(char)
-    if not char then
-        return warn("failed to get valid character")
-    end
-
-    local hum = char:WaitForChild("Humanoid", 1)
-    if not hum then
-        return warn("Failed to get humanoid")
-    end
-
-    if not self:CheckValidRigType(hum) then
-        return self.LocalPlayer:Kick("Change avatar to R15")
-    end
-
-    local animator = hum:WaitForChild("Animator", 1)
-    if not animator then
-        return warn("failed to get animator")
-    end
-
+    if not char then return "character missing" end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if not hum then return "humanoid missing" end
+    if not self:CheckValidRigType(hum) then return "R15 required for animation" end
+    local animator = hum:WaitForChild("Animator", 10)
+    if not animator then return "animator missing" end
     return "success"
+end
+
+
+-- Modern visual refresh; preserves original GUI buttons and their behavior.
+function utility:ModernizeUI()
+    local gui = self.MainUI
+    local main = self.Main
+    local panel = self.Panel
+    if not (gui and main and panel) then return end
+
+    local function corner(obj, pixels)
+        local c = obj:FindFirstChildOfClass("UICorner") or Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, pixels)
+        c.Parent = obj
+    end
+
+    local function stroke(obj, color, transparency)
+        local s = obj:FindFirstChildOfClass("UIStroke") or Instance.new("UIStroke")
+        s.Color = color
+        s.Transparency = transparency or 0
+        s.Thickness = 1
+        s.Parent = obj
+    end
+
+    local function gradient(obj, top, bottom)
+        local g = obj:FindFirstChildOfClass("UIGradient") or Instance.new("UIGradient")
+        g.Color = ColorSequence.new(top, bottom)
+        g.Rotation = 90
+        g.Parent = obj
+    end
+
+    local accent = Color3.fromRGB(109, 93, 252)
+    local dark = Color3.fromRGB(19, 21, 33)
+    local muted = Color3.fromRGB(29, 32, 48)
+    local textColor = Color3.fromRGB(238, 241, 255)
+
+    gui.DisplayOrder = 20
+    main.Size = UDim2.fromOffset(56, 56)
+    self.GearButton.Size = UDim2.fromOffset(56, 56)
+    self.GearButton.BackgroundColor3 = dark
+    corner(self.GearButton, 16)
+    stroke(self.GearButton, accent, 0.1)
+    gradient(self.GearButton, Color3.fromRGB(43, 40, 82), dark)
+
+    panel.BackgroundColor3 = dark
+    panel.Position = UDim2.new(0, 0, 1, 10)
+    corner(panel, 16)
+    stroke(panel, Color3.fromRGB(76, 79, 113), 0.15)
+    gradient(panel, Color3.fromRGB(30, 32, 51), Color3.fromRGB(17, 19, 30))
+
+    local header = Instance.new("TextLabel")
+    header.Name = "ModernHeader"
+    header.LayoutOrder = 0
+    header.Size = UDim2.new(1, 0, 0, 38)
+    header.BackgroundTransparency = 1
+    header.Font = Enum.Font.GothamBold
+    header.Text = "DROP KICK   •   CONTROLS"
+    header.TextColor3 = textColor
+    header.TextSize = 12
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = panel
+
+    for _, button in ipairs({self.ClickButton, self.KeyButton, self.UIButton}) do
+        button.BackgroundColor3 = muted
+        button.TextColor3 = textColor
+        button.Font = Enum.Font.GothamSemibold
+        button.TextSize = 13
+        corner(button, 10)
+        stroke(button, Color3.fromRGB(70, 73, 101), 0.45)
+        button.MouseEnter:Connect(function()
+            self.TweenService:Create(button, TweenInfo.new(0.12), {
+                TextColor3 = Color3.fromRGB(198, 192, 255)
+            }):Play()
+        end)
+        button.MouseLeave:Connect(function()
+            self.TweenService:Create(button, TweenInfo.new(0.12), {
+                TextColor3 = textColor
+            }):Play()
+        end)
+    end
+
+    self.KeyConfig.BackgroundColor3 = muted
+    corner(self.KeyConfig, 10)
+    self.KeyBox.BackgroundColor3 = Color3.fromRGB(56, 50, 103)
+    corner(self.KeyBox, 8)
+
+    self.ActionButton.BackgroundColor3 = accent
+    self.ActionButton.Text = "⚡ DROP KICK"
+    self.ActionButton.Font = Enum.Font.GothamBold
+    self.ActionButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    corner(self.ActionButton, 13)
+    stroke(self.ActionButton, Color3.fromRGB(170, 158, 255), 0.15)
+    gradient(self.ActionButton, Color3.fromRGB(126, 108, 255), Color3.fromRGB(82, 66, 212))
+    self.ActionButton.Size = UDim2.fromOffset(148, 46)
+
+    -- Keep the original selection highlighting, but use the new palette.
+    self:UpdateUI()
 end
 
 function utility:Initialize()
     self.LocalPlayer = self.Players.LocalPlayer
-
     if not self.LocalPlayer then
-        return warn("failed to get localplayer")
-    end
-
-    pcall(makefolder, self.cacheFolder)
-
-    self:LoadSettings()
-
-    self.character = self.LocalPlayer.Character
-    if not self.character then
-        self.character = self.LocalPlayer.CharacterAdded:Wait()
-    end
-
-
-    if self:BeginDropkickHook(self.character) ~= "success" then
+        warn("Dropkick UI must run in a client LocalScript")
         return
     end
 
-    self.charadded = self.LocalPlayer.CharacterAdded:Connect(function(character)
-        self:BeginDropkickHook(character)
-    end)
-
+    -- Create UI first: character loading must never block the menu.
     self:CreateUI()
+    self:ModernizeUI()
     self:MouseDetection()
     self:StartKeyDetection()
 
-    task.defer(function()
-        if not self.unloaded then self:SetupGlobalNoClip() end
-    end)
-
-    if not self.charadded then
-        return warn("failed to initialize charadded")
+    local function onCharacter(character)
+        self.character = character
+        task.spawn(function()
+            local result = self:BeginDropkickHook(character)
+            if result ~= "success" then
+                warn("Dropkick animation unavailable: " .. result)
+            end
+        end)
     end
 
-    return warn("success")
+    self.charadded = self.LocalPlayer.CharacterAdded:Connect(onCharacter)
+    if self.LocalPlayer.Character then onCharacter(self.LocalPlayer.Character) end
+    print("Dropkick UI loaded")
 end
 
+
 utility:Initialize()
+]====])
+print("Original dropkick controller and server installed. Press Play (F5).")
